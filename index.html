@@ -367,6 +367,7 @@
                 <div class="m-row"><span>收件人</span><b id="cName">—</b></div>
                 <div class="m-row"><span>電話</span><b id="cPhone">—</b></div>
                 <div class="m-row"><span>地址</span><b id="cAddr">—</b></div>
+                <div class="m-row"><span>訂單編號</span><b id="cOrderId">—</b></div>
               </div>
               <div class="modal-sec">
                 <h4>已選商品</h4>
@@ -755,13 +756,45 @@
   fPhone.addEventListener('blur', checkPhoneHint);
 
   var submitBtn=document.getElementById('submitBtn');
+  var confirmSendBtn=document.getElementById('confirmSendBtn');
   var sending=false;
+  var deliveryUnknown=false;
+  var pendingOrder=null;
+  function cartFingerprint(){
+    return JSON.stringify({
+      items: cart.map(function(it){ return [it.id,it.color,it.size,it.qty]; }),
+      name: fName.value.trim(),
+      phone: fPhone.value.replace(/[\s-]/g,''),
+      addr: fAddr.value.trim()
+    });
+  }
+  function mintOrderId(){
+    var rand='';
+    try{
+      if (window.crypto && window.crypto.getRandomValues){
+        var a=new Uint8Array(6); window.crypto.getRandomValues(a);
+        rand=Array.prototype.map.call(a,function(b){ return ('0'+b.toString(16)).slice(-2); }).join('');
+      }
+    }catch(e){}
+    if (!rand) rand=(Math.random().toString(36).slice(2,8)+Math.random().toString(36).slice(2,8));
+    return 'MS'+Date.now().toString(36).toUpperCase()+'-'+rand.toUpperCase();
+  }
+  function ensurePendingOrder(){
+    var fp=cartFingerprint();
+    if (!pendingOrder || pendingOrder.fingerprint!==fp){
+      pendingOrder={ id:mintOrderId(), fingerprint:fp, submittedAt:new Date().toISOString() };
+      deliveryUnknown=false;
+    }
+    return pendingOrder;
+  }
   var confirmModal=document.getElementById('confirmModal');
   function openConfirmModal(){
     var t=cartTotals();
+    var order=ensurePendingOrder();
     document.getElementById('cName').textContent=fName.value.trim();
     document.getElementById('cPhone').textContent=fPhone.value.replace(/[\s-]/g,'');
     document.getElementById('cAddr').textContent=fAddr.value.trim();
+    document.getElementById('cOrderId').textContent=order.id;
     var itemsHtml='';
     cart.forEach(function(it){ var p=byId[it.id]; var unit=unitPrice(p,it.color); itemsHtml+='<div><span>'+p.name+'<br><small style="color:#68766d">'+it.color+' · '+it.size+'</small> × '+it.qty+'</span><b>'+fmt(unit*it.qty)+'</b></div>'; });
     document.getElementById('cItems').innerHTML=itemsHtml;
@@ -771,7 +804,7 @@
   function closeConfirmModal(){ confirmModal.classList.remove('open'); }
   document.getElementById('backToEditBtn').addEventListener('click', closeConfirmModal);
   confirmModal.addEventListener('click', function(e){ if (e.target===confirmModal) closeConfirmModal(); });
-  document.getElementById('confirmSendBtn').addEventListener('click', function(){ closeConfirmModal(); doSubmit(); });
+  confirmSendBtn.addEventListener('click', function(){ if (sending) return; closeConfirmModal(); doSubmit(); });
   submitBtn.addEventListener('click', function(){
     if (sending) return;
     var t=cartTotals(); var problems=[];
@@ -783,10 +816,17 @@
     err.classList.remove('show');
     openConfirmModal();
   });
+  function setSubmitLock(locked){
+    submitBtn.disabled=locked; submitBtn.style.opacity=locked?'.65':'';
+    confirmSendBtn.disabled=locked; confirmSendBtn.style.opacity=locked?'.65':'';
+    if (locked){ submitBtn.textContent='送出中，請勿重複點按…'; confirmSendBtn.textContent='送出中…'; }
+  }
   function doSubmit(){
     if (sending) return;
+    var order=ensurePendingOrder();
     var t=cartTotals();
     var payload={
+      orderId: order.id,
       userId: liffUser.userId || '',
       displayName: liffUser.displayName || '',
       memberId: '',
@@ -796,34 +836,46 @@
       items: cart.map(function(it){ return { productCode: it.id, color: it.color, size: it.size, quantity: it.qty }; }),
       itemCount: t.count,
       total: t.total,
-      submittedAt: new Date().toISOString()
+      submittedAt: order.submittedAt
     };
-    sending=true; submitBtn.disabled=true; submitBtn.textContent='送出中…'; submitBtn.style.opacity='.65';
-    function sendFailed(){
-      sending=false; submitBtn.disabled=false; submitBtn.textContent='送出訂單'; submitBtn.style.opacity='';
-      err.textContent='送出失敗，訂單還沒有送出去 — 請檢查網路後再按一次「送出訂單」。你的購物車和收件資料都還在，不用重填。';
+    sending=true; setSubmitLock(true);
+    function sendRejected(status){
+      // Make 有明確回覆錯誤（例如 scenario 沒開）＝這筆沒有被收下，可以用同一個訂單編號重送。
+      sending=false; setSubmitLock(false);
+      submitBtn.textContent='送出訂單'; confirmSendBtn.textContent='確認送出';
+      err.textContent='送出失敗（Make 回覆 '+status+'），這筆訂單沒有送成功 — 請再按一次「送出訂單」，重送會使用同一個訂單編號 '+order.id+'。你的購物車和收件資料都還在，不用重填。';
+      err.classList.add('show'); err.scrollIntoView({behavior:'smooth',block:'center'});
+    }
+    function sendUnknown(){
+      // 超時或斷線：瀏覽器放棄等待不代表 Make 沒收到 — 請求可能已進 Make 佇列照樣會寫入。
+      // 所以不能跟客人說「還沒送出去」，也不能換新編號重送，不然就會變成重複訂單。
+      sending=false; deliveryUnknown=true; setSubmitLock(false);
+      submitBtn.textContent='以相同訂單編號重新送出'; confirmSendBtn.textContent='確認送出';
+      err.textContent='送出等太久，無法確定訂單是否已經送達（訂單編號 '+order.id+'）。請先不要重複下單：把這個畫面截圖，用 LINE 跟我們確認有沒有收到這筆；如果確認沒收到，再回來按「以相同訂單編號重新送出」。';
       err.classList.add('show'); err.scrollIntoView({behavior:'smooth',block:'center'});
     }
     var ctrl=(typeof AbortController!=='undefined')?new AbortController():null;
-    var timer=ctrl?setTimeout(function(){ try{ctrl.abort();}catch(e){} },25000):null;
+    var timer=ctrl?setTimeout(function(){ try{ctrl.abort();}catch(e){} },60000):null;
     var opts={method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)};
     if (ctrl) opts.signal=ctrl.signal;
     fetch(WEBHOOK_URL, opts).then(function(res){
       if (timer) clearTimeout(timer);
-      if (!res.ok) throw new Error('HTTP '+res.status);
+      if (!res.ok){ sendRejected('HTTP '+res.status); return; }
       var itemsHtml='';
       cart.forEach(function(it){ var p=byId[it.id]; var unit=unitPrice(p,it.color); itemsHtml+='<div><span>'+p.name+'<br><small style="color:#68766d">'+it.color+' · '+it.size+'</small> × '+it.qty+'</span><b>'+fmt(unit*it.qty)+'</b></div>'; });
       document.getElementById('rItems').innerHTML=itemsHtml;
-      document.getElementById('rOrderNo').textContent='已送出';
+      document.getElementById('rOrderNo').textContent='已送出 · 編號 '+order.id;
       document.getElementById('rName').textContent=payload.recipientName;
       document.getElementById('rPhone').textContent=payload.recipientPhone;
       document.getElementById('rTotal').textContent=fmt(t.total);
       cart=[]; renderCart();
-      sending=false; submitBtn.disabled=false; submitBtn.textContent='送出訂單'; submitBtn.style.opacity='';
+      pendingOrder=null; deliveryUnknown=false;
+      sending=false; setSubmitLock(false);
+      submitBtn.textContent='送出訂單'; confirmSendBtn.textContent='確認送出';
       document.getElementById('formView').style.display='none'; document.getElementById('formFoot').style.display='none'; document.getElementById('confirmView').classList.add('show'); document.querySelector('.screen').scrollTop=0;
     }).catch(function(){
       if (timer) clearTimeout(timer);
-      sendFailed();
+      sendUnknown();
     });
   }
   document.getElementById('againBtn').addEventListener('click', function(){ document.getElementById('confirmView').classList.remove('show'); document.getElementById('formView').style.display=''; document.getElementById('formFoot').style.display=''; document.getElementById('formView').scrollTop=0; });
