@@ -394,7 +394,7 @@
               <div class="r-row" style="border-top:1px dashed #dfe4df;margin-top:8px;padding-top:9px"><span>總額（含運）</span><b id="rTotal" style="color:#049c43">NT$ 0</b></div>
             </div>
             <div class="receipt" style="font-size:.86rem;color:#5c6d62">
-              接下來：我們確認商品買得到後，會在 LINE 通知你付款方式；出貨前也會再跟你確認一次收件資料。
+              接下來：我們確認商品買得到後，會在 LINE 通知你付款方式。
             </div>
             <button class="again-btn" type="button" id="againBtn">再填一張（回到表單）</button>
           </div>
@@ -708,7 +708,7 @@
     dImg.src=p.img; dImg.alt=p.name+'商品圖'; dName.textContent=p.name+'（'+p.id+'）'; dTag.innerHTML=tagHtml(p); dQty.textContent='1'; dColors.innerHTML='';
     p.colors.forEach(function(c){
       var b=document.createElement('button'); b.type='button'; b.className='opt-chip'; b.setAttribute('data-v',c);
-      var cp=unitPrice(p,c); b.innerHTML=c+((cp!==null && cp!==undefined && cp!==p.price)?' <small>'+fmt(cp)+'</small>':'');
+      b.textContent=c;
       b.addEventListener('click', function(){cur.color=c; refreshDetail();}); dColors.appendChild(b);
     });
     dSizes.innerHTML='';
