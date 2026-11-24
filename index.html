@@ -759,6 +759,7 @@
   var confirmSendBtn=document.getElementById('confirmSendBtn');
   var sending=false;
   var deliveryUnknown=false;
+  var cooldownTimer=null;
   var pendingOrder=null;
   function cartFingerprint(){
     return JSON.stringify({
@@ -821,6 +822,25 @@
     confirmSendBtn.disabled=locked; confirmSendBtn.style.opacity=locked?'.65':'';
     if (locked){ submitBtn.textContent='送出中，請勿重複點按…'; confirmSendBtn.textContent='送出中…'; }
   }
+  function startRetryCooldown(seconds, submitText, confirmText){
+    if (cooldownTimer){ clearInterval(cooldownTimer); cooldownTimer=null; }
+    sending=false;
+    setSubmitLock(true);
+    var left=seconds;
+    submitBtn.textContent='請等 '+left+' 秒再試';
+    confirmSendBtn.textContent='請等 '+left+' 秒';
+    cooldownTimer=setInterval(function(){
+      left--;
+      if (left<=0){
+        clearInterval(cooldownTimer); cooldownTimer=null;
+        setSubmitLock(false);
+        submitBtn.textContent=submitText; confirmSendBtn.textContent=confirmText;
+        return;
+      }
+      submitBtn.textContent='請等 '+left+' 秒再試';
+      confirmSendBtn.textContent='請等 '+left+' 秒';
+    }, 1000);
+  }
   function doSubmit(){
     if (sending) return;
     var order=ensurePendingOrder();
@@ -841,18 +861,19 @@
     sending=true; setSubmitLock(true);
     function sendRejected(status){
       // Make 有明確回覆錯誤（例如 scenario 沒開）＝這筆沒有被收下，可以用同一個訂單編號重送。
-      sending=false; setSubmitLock(false);
-      submitBtn.textContent='送出訂單'; confirmSendBtn.textContent='確認送出';
-      err.textContent='送出失敗（Make 回覆 '+status+'），這筆訂單沒有送成功 — 請再按一次「送出訂單」，重送會使用同一個訂單編號 '+order.id+'。你的購物車和收件資料都還在，不用重填。';
+      // 但要等 30 秒再按，讓前面那次執行有時間寫完，不然同時重送會變重複訂單。
+      err.textContent='送出失敗（Make 回覆 '+status+'），這筆訂單沒有送成功 — 請等 30 秒再按一次「送出訂單」，重送會使用同一個訂單編號 '+order.id+'。你的購物車和收件資料都還在，不用重填。如果一直失敗，請用 LINE 跟我們確認。';
       err.classList.add('show'); err.scrollIntoView({behavior:'smooth',block:'center'});
+      startRetryCooldown(30, '送出訂單', '確認送出');
     }
     function sendUnknown(){
       // 超時或斷線：瀏覽器放棄等待不代表 Make 沒收到 — 請求可能已進 Make 佇列照樣會寫入。
       // 所以不能跟客人說「還沒送出去」，也不能換新編號重送，不然就會變成重複訂單。
-      sending=false; deliveryUnknown=true; setSubmitLock(false);
-      submitBtn.textContent='以相同訂單編號重新送出'; confirmSendBtn.textContent='確認送出';
-      err.textContent='送出等太久，無法確定訂單是否已經送達（訂單編號 '+order.id+'）。請先不要重複下單：把這個畫面截圖，用 LINE 跟我們確認有沒有收到這筆；如果確認沒收到，再回來按「以相同訂單編號重新送出」。';
+      // 等 60 秒再開放重按，讓前面那次執行有時間寫完。
+      deliveryUnknown=true;
+      err.textContent='送出等太久，無法確定訂單是否已經送達（訂單編號 '+order.id+'）。請先不要重複下單：把這個畫面截圖，用 LINE 跟我們確認有沒有收到這筆；如果確認沒收到，60 秒後再回來按「以相同訂單編號重新送出」。';
       err.classList.add('show'); err.scrollIntoView({behavior:'smooth',block:'center'});
+      startRetryCooldown(60, '以相同訂單編號重新送出', '確認送出');
     }
     var ctrl=(typeof AbortController!=='undefined')?new AbortController():null;
     var timer=ctrl?setTimeout(function(){ try{ctrl.abort();}catch(e){} },60000):null;
