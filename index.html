@@ -280,7 +280,14 @@
 
 <div class="card" id="pendingPanel" hidden><b>訂單處理狀態</b><p id="pendingMessage" role="status" aria-live="polite" style="overflow-wrap:anywhere;font-size:.88rem"></p><button type="button" id="checkOrderBtn" class="again-btn">查詢訂單狀態</button><button type="button" id="retryOrderBtn" class="again-btn" style="margin-top:8px" hidden>以相同識別碼重新送出</button><button type="button" id="copyOrderBtn" class="again-btn" style="margin-top:8px;background:#fff;color:#17211b;border:1px solid #d5dbd5">複製訂單識別碼</button><a href="https://line.me/R/ti/p/@955vdksg" target="_blank" rel="noopener noreferrer" class="again-btn" style="display:block;text-align:center;text-decoration:none;margin-top:8px;background:#008a3b;box-sizing:border-box">聯絡 LINE 客服</a><p id="copyFeedback" role="status" style="font-size:.85rem;margin-bottom:0"></p></div>
 <div class="card" id="authPanel"><p id="authMessage" role="status">正在驗證 LINE 身分…</p><button type="button" id="loginBtn" class="again-btn" hidden>登入 LINE</button></div>
-            <div class="card user-card" id="userCard" style="display:none">
+            <div class="card" id="friendPanel" hidden>
+  <b>請先加入官方 LINE 好友</b>
+  <p id="friendMessage" role="status" aria-live="polite" style="font-size:.85rem">正在確認好友狀態…</p>
+  <button type="button" id="addFriendBtn" class="again-btn" style="background:#008a3b" hidden>加入好友／解除封鎖</button>
+  <a href="https://line.me/R/ti/p/@955vdksg" target="_blank" rel="noopener noreferrer" style="display:block;margin-top:8px">開啟官方 LINE @955vdksg</a>
+  <button type="button" id="recheckFriendBtn" class="again-btn" style="margin-top:8px">已加入，重新驗證</button>
+</div>
+<div class="card user-card" id="userCard" style="display:none">
               <div class="user-ava" id="userAva">M</div>
               <div>
                 <h3><span id="liffDisplayName"></span></h3>
@@ -489,6 +496,31 @@
   var LIFF_ID = '2012753244-ZHnTkj9c';
   var liffUser = { userId:'', displayName:'' };
   var authenticated=false, catalogLive=false;
+  var friendVerified=false, friendBusy=false;
+  async function checkFriendship(promptUser){
+    if(!authenticated||friendBusy)return false;
+    friendBusy=true; friendVerified=false;
+    var panel=document.getElementById('friendPanel'), msg=document.getElementById('friendMessage');
+    var add=document.getElementById('addFriendBtn'), retry=document.getElementById('recheckFriendBtn');
+    add.disabled=retry.disabled=true; refreshSubmit();
+    try{
+      if(promptUser && typeof liff.requestFriendship==='function' && liff.isInClient()){
+        try{await liff.requestFriendship();}catch(e){/* official account link remains available */}
+      }
+      var result=await liff.getFriendship();
+      friendVerified=!!result && result.friendFlag===true;
+      msg.textContent=friendVerified?'好友驗證完成。':'為了收到訂單確認及付款資訊，請先加入官方 LINE 好友或解除封鎖，再重新驗證。';
+    }catch(e){
+      msg.textContent='暫時無法確認好友狀態，請重新驗證或聯絡官方 LINE 客服。';
+    }finally{
+      friendBusy=false; panel.hidden=friendVerified;
+      add.hidden=typeof liff.requestFriendship!=='function'||!liff.isInClient();
+      add.disabled=retry.disabled=false; refreshSubmit();
+    }
+    return friendVerified;
+  }
+  document.getElementById('addFriendBtn').onclick=function(){checkFriendship(true);};
+  document.getElementById('recheckFriendBtn').onclick=function(){checkFriendship(false);};
   function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
   function applyLiffUser(){
     document.getElementById('liffDisplayName').textContent=liffUser.displayName;
@@ -513,6 +545,7 @@
       document.getElementById('authPanel').hidden=true;
       restorePending(); refreshSubmit();
       if(pendingOrder) checkPending(false);
+      checkFriendship(false);
     }catch(e){msg.textContent='LINE 身分驗證未完成，請重新開啟頁面或使用 LINE 登入。';btn.hidden=false;btn.textContent='重新驗證';btn.onclick=function(){location.reload();};}
   }
   var CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vT_DfX-nftWQHZ0rX6saFfXFYVYLrF_0t24QKXWMUEnhXdrl2OcqLl9a-zj362f_Ro85XqaGep8fEb8/pub?gid=1200696739&single=true&output=csv';
@@ -794,9 +827,9 @@
   }
   function refreshSubmit(){
     var blocked=!!pendingOrder||sending;
-    submitBtn.disabled=blocked||!authenticated||!catalogLive;
-    submitBtn.textContent=blocked?'訂單確認中，請勿重複下單':!authenticated?'請先登入 LINE':!catalogLive?'請先讀取最新目錄':'送出訂單';
-    confirmSendBtn.disabled=blocked||!authenticated||!catalogLive;
+    submitBtn.disabled=blocked||!authenticated||!friendVerified||friendBusy||!catalogLive;
+    submitBtn.textContent=blocked?'訂單確認中，請勿重複下單':!authenticated?'請先登入 LINE':friendBusy?'正在驗證好友':!friendVerified?'請先加入官方 LINE 好友':!catalogLive?'請先讀取最新目錄':'送出訂單';
+    confirmSendBtn.disabled=blocked||!authenticated||!friendVerified||friendBusy||!catalogLive;
     [fName,fPhone,fAddr].forEach(function(e){e.disabled=blocked;});
     cartList.querySelectorAll('button').forEach(function(e){e.disabled=blocked;});
     pendingPanel.hidden=!pendingOrder;
@@ -813,6 +846,7 @@
   function validateCart(){
     var problems=[];
     if(!authenticated)problems.push('請先登入 LINE');
+    if(!friendVerified||friendBusy)problems.push('請先完成官方 LINE 好友驗證');
     if(!catalogLive)problems.push('請先重新讀取最新目錄');
     if(cart.length<1||cart.length>10)problems.push('每張訂單須有 1–10 種商品規格');
     if(!fName.value.trim()||fName.value.trim().length>100)problems.push('請填寫正確收件人姓名');
@@ -929,6 +963,11 @@
     try{await exclusive(async function(){
       token();
       if(getMarker()){restorePending();updatePending('已有待確認訂單，請先查詢。');return;}
+      if(!await checkFriendship(false)){
+        showError('尚未完成官方 LINE 好友驗證，本次未送出。');
+        document.getElementById('friendPanel').scrollIntoView({behavior:'smooth',block:'center'});
+        return;
+      }
       var m={id:reviewed.payload.orderId,started:Date.now()};
       sessionStorage.setItem(snapshotKey(m.id),JSON.stringify(reviewed));
       localStorage.setItem(markerKey(),JSON.stringify(m));
@@ -955,6 +994,7 @@
       if(v.status==='completed'){finishOrder(v);return;}
       if(v.status==='cancelled'){finishCancelled(v);return;}
       if(v.status!=='not_found'){updatePending('訂單已存在或目前無法確認，請勿重送。請查詢狀態。');return;}
+      if(!await checkFriendship(false)){updatePending('請先加入官方 LINE 好友並重新驗證，再重送原訂單。');return;}
       pendingOrder.started=Date.now();localStorage.setItem(markerKey(),JSON.stringify({id:pendingOrder.id,started:pendingOrder.started}));
       await sendSnapshot();
     });}catch(e){updatePending('無法確認結果，請私訊我們。');}finally{sending=false;nextCheck=Date.now()+10000;refreshSubmit();}
